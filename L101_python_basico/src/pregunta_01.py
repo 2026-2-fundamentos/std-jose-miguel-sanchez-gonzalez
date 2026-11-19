@@ -1,3 +1,6 @@
+from pathlib import Path
+import pandas as pd
+
 def pregunta_01():
     """
     Calcule la suma de los valores de la segunda columna (`value`) del
@@ -7,5 +10,8 @@ def pregunta_01():
 
         214
     """
-
-    raise NotImplementedError
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_archivo = directorio_actual.parent / "data" / "data.csv.gz"
+    
+    df = pd.read_csv(ruta_archivo, header=None, sep="\t")
+    return df.iloc[:, 1].sum()

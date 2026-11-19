@@ -1,3 +1,6 @@
+from pathlib import Path
+import pandas as pd
+
 def pregunta_10():
     """
     Para cada registro del archivo, en el mismo orden en que aparecen,
@@ -10,5 +13,15 @@ def pregunta_10():
 
         [("E", 3, 5), ("A", 3, 4), ("B", 4, 4), ...]
     """
-
-    raise NotImplementedError
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_archivo = directorio_actual.parent / "data" / "data.csv.gz"
+    
+    df = pd.read_csv(ruta_archivo, header=None, sep="\t")
+    respuesta = []
+    for i in df.itertuples(index=False):
+        letter = i[0]
+        codes_count = len(i[3].split(','))
+        metrics_count = len(i[4].split(','))
+        respuesta.append((letter, codes_count, metrics_count))
+    
+    return respuesta

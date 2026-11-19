@@ -1,3 +1,6 @@
+from pathlib import Path
+import pandas as pd
+
 def pregunta_07():
     """
     Para cada valor distinto de la segunda columna (`value`), construya la
@@ -10,5 +13,11 @@ def pregunta_07():
 
         [(0, ["C"]), (1, ["E", "B", "E"]), (2, ["A", "E"]), ...]
     """
-
-    raise NotImplementedError
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_archivo = directorio_actual.parent / "data" / "data.csv.gz"
+    
+    df = pd.read_csv(ruta_archivo, header=None, sep="\t")
+    grouped = df.groupby(1)[0].apply(list).reset_index()
+    respuesta = [(row[1], row[0]) for _, row in grouped.iterrows()]
+    
+    return respuesta
