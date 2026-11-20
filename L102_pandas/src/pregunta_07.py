@@ -1,3 +1,6 @@
+from pathlib import Path
+import pandas as pd
+
 def pregunta_07():
     """
     Usando `data/tbl0.tsv`, sume los valores de la columna `c2` para cada
@@ -12,5 +15,9 @@ def pregunta_07():
         C    27
         ...
     """
-
-    raise NotImplementedError
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_archivo = directorio_actual.parent / "data" / "tbl0.tsv"
+    
+    df = pd.read_csv(ruta_archivo, sep='\t')
+    
+    return df.groupby('c1')['c2'].sum().sort_index()
