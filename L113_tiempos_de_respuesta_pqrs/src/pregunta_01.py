@@ -1,5 +1,6 @@
 import pandas as pd
-
+import numpy as np
+from pathlib import Path
 
 def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -60,5 +61,125 @@ def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         letter,28138,...
         ...
     """
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_web = directorio_actual.parent / "data" / "historical_requests_web.csv.gz"
+    ruta_cartas = directorio_actual.parent / "data" / "historical_requests_letter.csv.gz"
+    ruta_channel_summary = directorio_actual.parent / "submission" / "channel_summary.csv"
+    ruta_yearly_summary = directorio_actual.parent / "submission" / "yearly_summary.csv"
+    ruta_entry_day_summary = directorio_actual.parent / "submission" / "entry_day_summary.csv"
+    
+    # 1. Leer archivos y eliminar filas idénticas dentro de cada canal
+    df_web = pd.read_csv(ruta_web, sep=",").drop_duplicates().copy()
+    df_web["channel"] = "web"
 
-    raise NotImplementedError
+    df_letter = pd.read_csv(ruta_cartas, sep=",").drop_duplicates().copy()
+    df_letter["channel"] = "letter"
+
+    df = pd.concat([df_web, df_letter], ignore_index=True)
+
+    # 2. Conversión de fechas e identificación de solicitudes respondidas vs. pendientes
+    in_dt = pd.to_datetime(df["in_date"])
+    out_dt = pd.to_datetime(df["out_date"])
+
+    df["year"] = in_dt.dt.year
+    df["is_answered"] = out_dt.notna()
+
+    # Días calendario: diferencia entre fecha de respuesta y fecha de entrada
+    df["calendar_days"] = (out_dt - in_dt).dt.days
+
+    # Días hábiles: lunes a viernes posteriores a in_dt hasta out_dt incluida.
+    # np.busday_count(A, B) cuenta días hábiles en [A, B).
+    # Sumar 1 día a ambas fechas desplaza el intervalo a [A + 1 día, B + 1 día),
+    # lo que equivale exactamente a los días hábiles en (in_dt, out_dt].
+    answered_mask = df["is_answered"]
+    in_dates_next = (in_dt[answered_mask] + pd.Timedelta(days=1)).values.astype(
+        "datetime64[D]"
+    )
+    out_dates_next = (out_dt[answered_mask] + pd.Timedelta(days=1)).values.astype(
+        "datetime64[D]"
+    )
+
+    df["business_days"] = np.nan
+    df.loc[answered_mask, "business_days"] = np.busday_count(
+        in_dates_next, out_dates_next
+    )
+
+    # Cumplimiento del plazo: respondida en <= 15 días hábiles (pendientes = False)
+    df["on_time"] = df["is_answered"] & (df["business_days"] <= 15)
+
+    # ---------------------------------------------------------
+    # 3. Tabla 1: channel_summary.csv
+    # ---------------------------------------------------------
+    channel_summary = (
+        df.groupby("channel", as_index=False)
+        .agg(
+            requests=("channel", "count"),
+            answered=("is_answered", "sum"),
+            pending=("is_answered", lambda s: int((~s).sum())),
+            median_business_days=("business_days", "median"),
+            on_time_rate=("on_time", "mean"),
+        )
+        .sort_values("channel")
+        .reset_index(drop=True)
+    )
+    channel_summary["answered"] = channel_summary["answered"].astype(int)
+
+    # ---------------------------------------------------------
+    # 4. Tabla 2: yearly_summary.csv
+    # ---------------------------------------------------------
+    yearly_summary = (
+        df.groupby(["year", "channel"], as_index=False)
+        .agg(
+            requests=("channel", "count"),
+            pending=("is_answered", lambda s: int((~s).sum())),
+            on_time_rate=("on_time", "mean"),
+        )
+        .sort_values(["year", "channel"])
+        .reset_index(drop=True)
+    )
+
+    # ---------------------------------------------------------
+    # 5. Tabla 3: entry_day_summary.csv
+    # ---------------------------------------------------------
+    day_order = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ]
+    # Detectar si day_name en el archivo viene en español o en inglés
+    sample_days = set(df["day_name"].dropna().unique())
+    if {"Lunes", "Martes", "Miércoles", "Jueves", "Viernes"} & sample_days:
+        day_order = [
+            "Lunes",
+            "Martes",
+            "Miércoles",
+            "Jueves",
+            "Viernes",
+            "Sábado",
+            "Domingo",
+        ]
+
+    entry_day_summary = (
+        df.groupby("day_name", as_index=False)
+        .agg(
+            requests=("day_name", "count"),
+            median_calendar_days=("calendar_days", "median"),
+            median_business_days=("business_days", "median"),
+        )
+        .set_index("day_name")
+        .reindex(day_order)
+        .reset_index()
+    )
+
+    # ---------------------------------------------------------
+    # 6. Guardar CSVs sin índice y retornar las tres tablas
+    # ---------------------------------------------------------
+    channel_summary.to_csv(ruta_channel_summary, index=False)
+    yearly_summary.to_csv(ruta_yearly_summary, index=False)
+    entry_day_summary.to_csv(ruta_entry_day_summary, index=False)
+
+    return channel_summary, yearly_summary, entry_day_summary
