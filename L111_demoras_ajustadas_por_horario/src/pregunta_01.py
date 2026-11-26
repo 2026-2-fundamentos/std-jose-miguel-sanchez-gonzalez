@@ -1,5 +1,5 @@
 import pandas as pd
-
+from pathlib import Path
 
 def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -57,5 +57,106 @@ def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame]:
         EV,819223,...,1,1
         ...
     """
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_entrada = directorio_actual.parent / "data" / "flights_by_carrier_day_hour.csv.gz"
+    ruta_hourly = directorio_actual.parent / "submission" / "hourly_delay_rates.csv"
+    ruta_carrier = directorio_actual.parent / "submission" / "carrier_adjusted_delays.csv"
 
-    raise NotImplementedError
+    df = pd.read_csv(ruta_entrada, sep=",")
+    
+    # ---------------------------------------------------------
+    # 1. Tabla: hourly_delay_rates.csv (una fila por hora, 0 a 23)
+    # ---------------------------------------------------------
+    hourly_delay_rates = (
+        df.groupby("scheduled_departure_hour", as_index=False)
+        .agg(
+            operated_flights=("operated_flights", "sum"),
+            delayed_departure_15_flights=("delayed_departure_15_flights", "sum"),
+        )
+        .sort_values("scheduled_departure_hour")
+        .reset_index(drop=True)
+    )
+    hourly_delay_rates["delay_rate"] = (
+        hourly_delay_rates["delayed_departure_15_flights"]
+        / hourly_delay_rates["operated_flights"]
+    )
+
+    # ---------------------------------------------------------
+    # 2. Tabla: carrier_adjusted_delays.csv
+    # ---------------------------------------------------------
+    # Agregar vuelos por aerolínea y hora para multiplicar por la tasa nacional horaria
+    carrier_hour = df.groupby(
+        ["reporting_airline", "scheduled_departure_hour"], as_index=False
+    ).agg(
+        operated_flights=("operated_flights", "sum"),
+        delayed_departure_15_flights=("delayed_departure_15_flights", "sum"),
+    )
+
+    carrier_hour = carrier_hour.merge(
+        hourly_delay_rates[["scheduled_departure_hour", "delay_rate"]].rename(
+            columns={"delay_rate": "national_hourly_rate"}
+        ),
+        on="scheduled_departure_hour",
+        how="left",
+    )
+
+    carrier_hour["expected_delayed_flights"] = (
+        carrier_hour["operated_flights"] * carrier_hour["national_hourly_rate"]
+    )
+
+    # Consolidar totales por aerolínea
+    carrier_summary = carrier_hour.groupby("reporting_airline", as_index=False).agg(
+        operated_flights=("operated_flights", "sum"),
+        delayed_departure_15_flights=("delayed_departure_15_flights", "sum"),
+        expected_delayed_flights=("expected_delayed_flights", "sum"),
+    )
+
+    # Filtrar aerolíneas con al menos 100,000 vuelos operados
+    carrier_summary = carrier_summary[
+        carrier_summary["operated_flights"] >= 100_000
+    ].copy()
+
+    # Tasas y razón observado / esperado
+    carrier_summary["delay_rate"] = (
+        carrier_summary["delayed_departure_15_flights"]
+        / carrier_summary["operated_flights"]
+    )
+    carrier_summary["observed_to_expected_ratio"] = (
+        carrier_summary["delayed_departure_15_flights"]
+        / carrier_summary["expected_delayed_flights"]
+    )
+
+    # Rankings (1 = peor aerolínea, es decir, mayor tasa/razón)
+    carrier_summary["crude_rank"] = (
+        carrier_summary["delay_rate"].rank(ascending=False, method="min").astype(int)
+    )
+    carrier_summary["adjusted_rank"] = (
+        carrier_summary["observed_to_expected_ratio"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
+
+    # Ordenar por adjusted_rank y seleccionar columnas en el orden exacto
+    carrier_adjusted_delays = (
+        carrier_summary.sort_values("adjusted_rank")[
+            [
+                "reporting_airline",
+                "operated_flights",
+                "delayed_departure_15_flights",
+                "delay_rate",
+                "expected_delayed_flights",
+                "observed_to_expected_ratio",
+                "crude_rank",
+                "adjusted_rank",
+            ]
+        ]
+        .reset_index(drop=True)
+    )
+
+    # ---------------------------------------------------------
+    # 3. Guardar CSVs sin índice y retornar las dos tablas
+    # ---------------------------------------------------------
+    hourly_delay_rates.to_csv(ruta_hourly, index=False)
+    carrier_adjusted_delays.to_csv(ruta_carrier, index=False)
+
+    return hourly_delay_rates, carrier_adjusted_delays
