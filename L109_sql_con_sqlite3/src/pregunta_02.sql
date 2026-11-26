@@ -21,3 +21,4 @@
 --
 --  Escriba su consulta debajo de esta línea.
 --
+SELECT COUNT(K0) FROM tbl1;
