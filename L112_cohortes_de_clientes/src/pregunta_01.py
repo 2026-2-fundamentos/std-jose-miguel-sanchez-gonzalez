@@ -1,5 +1,7 @@
 import pandas as pd
-
+from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def build_cohort_analysis() -> pd.DataFrame:
     """
@@ -43,5 +45,73 @@ def build_cohort_analysis() -> pd.DataFrame:
         2022-01,1,26,100,0.26
         ...
     """
+    directorio_actual = Path(__file__).resolve().parent
+    ruta_entrada = directorio_actual.parent / "data" / "sales.csv.gz"
+    ruta_cohort = directorio_actual.parent / "submission" / "cohort_retention.csv"
+    ruta_heatmap = directorio_actual.parent / "submission" / "cohort_retention_heatmap.png"
 
-    raise NotImplementedError
+    df = pd.read_csv(ruta_entrada, sep=",")
+    
+    # 1. Convertir OrderDate a período mensual (AAAA-MM)
+    df["order_period"] = pd.to_datetime(df["OrderDate"]).dt.to_period("M")
+
+    # 2. Mes de la primera compra de cada cliente (cohorte)
+    df["cohort_period"] = df.groupby("CustomerID")["order_period"].transform("min")
+
+    # 3. Calcular meses transcurridos desde cohort_month (period_index)
+    df["period_index"] = (
+        (df["order_period"].dt.year - df["cohort_period"].dt.year) * 12
+        + (df["order_period"].dt.month - df["cohort_period"].dt.month)
+    )
+    df["cohort_month"] = df["cohort_period"].astype(str)
+
+    # 4. Contar clientes únicos activos por cohorte y período
+    cohort_retention = (
+        df.groupby(["cohort_month", "period_index"], as_index=False)
+        .agg(active_customers=("CustomerID", "nunique"))
+        .sort_values(["cohort_month", "period_index"])
+        .reset_index(drop=True)
+    )
+
+    # 5. Calcular cohort_size (clientes activos en el período 0) y retention_rate
+    cohort_sizes = cohort_retention[cohort_retention["period_index"] == 0][
+        ["cohort_month", "active_customers"]
+    ].rename(columns={"active_customers": "cohort_size"})
+
+    cohort_retention = cohort_retention.merge(
+        cohort_sizes, on="cohort_month", how="left"
+    )
+    cohort_retention["retention_rate"] = (
+        cohort_retention["active_customers"] / cohort_retention["cohort_size"]
+    )
+
+    # 6. Guardar la tabla CSV sin índice
+    cohort_retention.to_csv(ruta_cohort, index=False)
+
+    # 7. Construir la matriz pivote para el mapa de calor (porcentajes)
+    # Los períodos no observados permanecen como NaN para quedar vacíos en el mapa
+    retention_matrix = (
+        cohort_retention.pivot(
+            index="cohort_month", columns="period_index", values="retention_rate"
+        )
+        * 100
+    )
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    sns.heatmap(
+        retention_matrix,
+        annot=True,
+        fmt=".1f",
+        cmap="Blues",
+        cbar_kws={"label": "Retención (%)"},
+        ax=ax,
+    )
+    ax.set_title("Retención de Clientes por Cohorte (%)")
+    ax.set_xlabel("Período (meses desde la primera compra)")
+    ax.set_ylabel("Cohorte (AAAA-MM)")
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(ruta_heatmap, dpi=150)
+    plt.close(fig)
+
+    return cohort_retention
